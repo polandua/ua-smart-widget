@@ -1,0 +1,1481 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>UA Smart Widget — Погода, Тривоги, Світло</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    @keyframes floatSlow {
+      0%, 100% { transform: translateY(0px); }
+      50% { transform: translateY(-4px); }
+    }
+    .anim-float {
+      animation: floatSlow 3.2s ease-in-out infinite;
+      display: inline-block;
+    }
+
+    @keyframes alertPulse {
+      0%, 100% { fill-opacity: 0.72; stroke-width: 1.5; }
+      50% { fill-opacity: 0.98; stroke-width: 2.5; }
+    }
+    .oblast-alert {
+      animation: alertPulse 1.8s ease-in-out infinite;
+    }
+
+    @keyframes fadeSlide {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .anim-enter {
+      animation: fadeSlide 0.28s ease-out both;
+    }
+
+    .widget-shell {
+      transition: max-width 0.35s cubic-bezier(0.22, 1, 0.36, 1), padding 0.25s ease;
+    }
+
+    .oblast-path {
+      transition: fill 0.25s ease, stroke 0.2s ease, opacity 0.2s ease;
+      cursor: pointer;
+    }
+    .oblast-path:hover {
+      filter: brightness(1.18);
+    }
+    body.theme-light {
+      background: linear-gradient(135deg, #e0f2fe 0%, #f1f5f9 50%, #e0e7ff 100%);
+      color: #0f172a;
+    }
+    body.theme-light .widget-shell,
+    body.theme-light #settingsPanel {
+      background-color: rgba(255, 255, 255, 0.86);
+      border-color: rgba(15, 23, 42, 0.12);
+      color: #0f172a;
+    }
+    body.theme-light .text-white { color: #0f172a !important; }
+    body.theme-light .text-slate-100,
+    body.theme-light .text-slate-200,
+    body.theme-light .text-slate-300 { color: #334155 !important; }
+    body.theme-light .text-slate-400 { color: #64748b !important; }
+    body.theme-light .bg-slate-950\/55,
+    body.theme-light .bg-slate-950\/50,
+    body.theme-light .bg-slate-950\/60,
+    body.theme-light .bg-slate-900\/80,
+    body.theme-light .bg-slate-900\/70,
+    body.theme-light .bg-slate-900\/90 {
+      background-color: rgba(241, 245, 249, 0.88) !important;
+      border-color: rgba(15, 23, 42, 0.1) !important;
+    }
+    body.theme-light .bg-white\/10,
+    body.theme-light .bg-white\/5 {
+      background-color: rgba(15, 23, 42, 0.06) !important;
+      border-color: rgba(15, 23, 42, 0.1) !important;
+    }
+
+    /* Нічний режим (OLED / приглушений, звук без змін) */
+    body.night-mode {
+      background: #020307 !important;
+      color: #cbd5e1 !important;
+    }
+    body.night-mode .widget-shell,
+    body.night-mode #settingsPanel {
+      background-color: rgba(6, 9, 17, 0.94) !important;
+      border-color: rgba(148, 163, 184, 0.12) !important;
+      box-shadow: 0 0 32px rgba(0, 0, 0, 0.85) !important;
+    }
+    body.night-mode .weather-galaxy-card {
+      filter: brightness(0.84) saturate(0.85);
+    }
+
+    /* Анімації погоди у стилі Samsung Galaxy One UI */
+    @keyframes galaxyGlow {
+      0%, 100% { transform: scale(1) translate(0, 0); opacity: 0.45; }
+      50% { transform: scale(1.12) translate(6px, -4px); opacity: 0.72; }
+    }
+    @keyframes galaxyRain {
+      0% { transform: translateY(-6px); opacity: 0; }
+      40% { opacity: 0.75; }
+      100% { transform: translateY(14px); opacity: 0; }
+    }
+    @keyframes galaxySunSpin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .galaxy-orb {
+      animation: galaxyGlow 5.5s ease-in-out infinite;
+    }
+    .galaxy-sun-ring {
+      animation: galaxySunSpin 18s linear infinite;
+    }
+    .galaxy-rain-drop {
+      animation: galaxyRain 1.3s linear infinite;
+    }
+  </style>
+  <meta name="theme-color" content="#0f172a" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+</head>
+<body class="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 text-slate-100 flex flex-col items-center justify-start p-3 sm:p-5">
+
+  <!-- Верхня панель керування форматами та налаштуваннями -->
+  <header class="w-full max-w-5xl mb-3 flex flex-wrap items-center justify-between gap-2 px-1">
+    <div class="flex items-center gap-2.5">
+      <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-sky-400 to-indigo-500 flex items-center justify-center shadow-lg shadow-sky-500/20 text-sm font-bold">
+        UA
+      </div>
+      <div>
+        <div class="flex flex-wrap items-center gap-2">
+          <h1 class="text-sm sm:text-base font-bold text-white leading-tight">UA Smart Widget</h1>
+          <span class="text-[10px] font-medium px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300 border border-sky-400/25">created - Andrii Poliakov</span>
+        </div>
+        <p class="text-[11px] text-slate-400">Погода · Курси валют · Карта тривог · Світло</p>
+      </div>
+    </div>
+
+    <div class="flex flex-wrap items-center gap-1.5">
+      <!-- Перемикач форматів віджета -->
+      <div class="inline-flex rounded-xl bg-slate-900/90 p-1 border border-white/10" role="group" aria-label="Формат віджета">
+        <button type="button" data-format="2x2" class="format-btn px-2.5 py-1 rounded-lg text-xs font-semibold transition text-slate-300 hover:text-white">2×2</button>
+        <button type="button" data-format="4x2" class="format-btn px-2.5 py-1 rounded-lg text-xs font-semibold transition text-slate-300 hover:text-white">4×2</button>
+        <button type="button" data-format="4x4" class="format-btn px-2.5 py-1 rounded-lg text-xs font-semibold transition bg-sky-500 text-white shadow">4×4 Повний</button>
+      </div>
+
+      <button id="notifyToggleBtn" type="button" title="Звукові та Push-сповіщення" class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-medium text-slate-200 border border-white/10 transition">
+        <span id="notifyIcon">🔔</span>
+        <span class="hidden sm:inline" id="notifyLabel">Сповіщ.: увімк.</span>
+      </button>
+
+      <button id="themeToggleBtn" type="button" title="Перемкнути тему" class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-medium text-slate-200 border border-white/10 transition">
+        <span id="themeIcon">🌙</span>
+        <span class="hidden sm:inline" id="themeLabel">Темна</span>
+      </button>
+
+      <button id="nightModeBtn" type="button" title="Нічний режим (звук без змін)" class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-medium text-slate-200 border border-white/10 transition">
+        <span id="nightIcon">🌌</span>
+        <span class="hidden sm:inline" id="nightLabel">Нічний: вимк.</span>
+      </button>
+
+      <button id="autoRefreshBtn" type="button" title="Авто-оновлення погоди (15 хв) та тривог (30 сек)" class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-xs font-semibold border border-emerald-400/30 transition">
+        <span id="autoDot" class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span id="autoLabel">Авто: 30с</span>
+      </button>
+
+      <button id="settingsToggleBtn" type="button" class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-medium text-slate-200 border border-white/10 transition">
+        <span>⚙️</span>
+        <span class="hidden sm:inline">Налаштування</span>
+      </button>
+
+      <button id="refreshBtn" type="button" class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 text-xs font-semibold border border-sky-400/30 transition">
+        <span id="refreshIcon">🔄</span>
+        <span class="hidden sm:inline">Оновити</span>
+      </button>
+
+      <span id="clockBadge" class="text-xs font-semibold text-slate-200 bg-white/10 px-2.5 py-1.5 rounded-xl border border-white/10 tabular-nums">--:--</span>
+    </div>
+  </header>
+
+  <!-- Панель налаштувань (населені пункти, черги світла, токен alerts.in.ua) -->
+  <section id="settingsPanel" class="hidden w-full max-w-5xl mb-3 rounded-2xl bg-slate-900/90 backdrop-blur-xl border border-white/15 p-4 shadow-2xl anim-enter">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-sm font-bold text-white">Налаштування локацій, черг світла та API</h2>
+      <button id="closeSettingsBtn" type="button" class="text-xs text-slate-400 hover:text-white px-2 py-1 rounded-lg bg-white/5">Закрити ✕</button>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+      <!-- Поточне розташування -->
+      <div class="rounded-xl bg-white/5 border border-white/10 p-3 space-y-2">
+        <div class="font-semibold text-sky-300">📍 Поточне розташування</div>
+        <div class="flex gap-1.5">
+          <button id="gpsBtn" type="button" class="px-2.5 py-1.5 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 font-semibold border border-sky-400/30 transition shrink-0">GPS</button>
+          <select id="citySelect" aria-label="Резервне місто для поточної локації" class="w-full bg-slate-800 text-slate-100 rounded-lg px-2 py-1.5 border border-white/10 focus:outline-none focus:ring-2 focus:ring-sky-500">
+            <option value="48.9226,24.7111,Івано-Франківська область" selected>Івано-Франківськ</option>
+            <option value="50.4501,30.5234,м. Київ">Київ</option>
+            <option value="49.8397,24.0297,Львівська область">Львів</option>
+            <option value="46.4825,30.7233,Одеська область">Одеса</option>
+            <option value="49.9935,36.2304,Харківська область">Харків</option>
+            <option value="48.4647,35.0462,Дніпропетровська область">Дніпро</option>
+          </select>
+        </div>
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-slate-400">Черга світла:</span>
+          <select id="queue0" class="queue-select bg-slate-800 text-slate-100 rounded-lg px-2 py-1 border border-white/10" data-idx="0"></select>
+        </div>
+      </div>
+
+      <!-- Населений пункт 1 -->
+      <div class="rounded-xl bg-white/5 border border-white/10 p-3 space-y-2">
+        <div class="font-semibold text-indigo-300">🏙️ Населений пункт 1</div>
+        <div class="flex gap-1.5">
+          <input id="searchCity1" type="text" placeholder="Пошук міста (напр. Тернопіль)" class="w-full bg-slate-800 text-slate-100 rounded-lg px-2.5 py-1.5 border border-white/10 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+          <button id="findCity1Btn" type="button" class="px-2.5 py-1.5 rounded-lg bg-indigo-500/25 hover:bg-indigo-500/35 text-indigo-200 font-semibold border border-indigo-400/30 transition">Знайти</button>
+        </div>
+        <div class="flex items-center justify-between gap-2">
+          <span id="city1NameBadge" class="text-slate-300 truncate">Київ</span>
+          <select id="queue1" class="queue-select bg-slate-800 text-slate-100 rounded-lg px-2 py-1 border border-white/10" data-idx="1"></select>
+        </div>
+      </div>
+
+      <!-- Населений пункт 2 -->
+      <div class="rounded-xl bg-white/5 border border-white/10 p-3 space-y-2">
+        <div class="font-semibold text-emerald-300">🏡 Населений пункт 2</div>
+        <div class="flex gap-1.5">
+          <input id="searchCity2" type="text" placeholder="Пошук міста (напр. Полтава)" class="w-full bg-slate-800 text-slate-100 rounded-lg px-2.5 py-1.5 border border-white/10 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+          <button id="findCity2Btn" type="button" class="px-2.5 py-1.5 rounded-lg bg-emerald-500/25 hover:bg-emerald-500/35 text-emerald-200 font-semibold border border-emerald-400/30 transition">Знайти</button>
+        </div>
+        <div class="flex items-center justify-between gap-2">
+          <span id="city2NameBadge" class="text-slate-300 truncate">Львів</span>
+          <select id="queue2" class="queue-select bg-slate-800 text-slate-100 rounded-lg px-2 py-1 border border-white/10" data-idx="2"></select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Налаштування проксі Apps Script та alerts.in.ua -->
+    <div class="mt-3 pt-3 border-t border-white/10 space-y-2 text-xs">
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="text-slate-300 font-medium">URL проксі Apps Script (тривоги + світло):</span>
+        <input id="proxyUrlInput" type="url" placeholder="https://script.google.com/macros/s/.../exec" class="flex-1 min-w-[220px] bg-slate-800 text-slate-100 rounded-lg px-2.5 py-1.5 border border-white/10 focus:outline-none focus:ring-2 focus:ring-sky-500" />
+        <button id="saveProxyBtn" type="button" class="px-3 py-1.5 rounded-lg bg-sky-500/25 hover:bg-sky-500/35 text-sky-200 font-semibold border border-sky-400/30 transition">Підключити проксі</button>
+      </div>
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="flex flex-wrap items-center gap-2 flex-1 min-w-[240px]">
+          <span class="text-slate-300 font-medium">Або токен alerts.in.ua напряму:</span>
+          <input id="alertsTokenInput" type="password" placeholder="Вставте токен з devs.alerts.in.ua або залиште демо-режим" class="flex-1 min-w-[200px] bg-slate-800 text-slate-100 rounded-lg px-2.5 py-1.5 border border-white/10 focus:outline-none focus:ring-2 focus:ring-rose-500" />
+          <button id="saveTokenBtn" type="button" class="px-3 py-1.5 rounded-lg bg-rose-500/25 hover:bg-rose-500/35 text-rose-200 font-semibold border border-rose-400/30 transition">Застосувати</button>
+        </div>
+        <div class="flex items-center gap-2">
+          <button id="testNotifyBtn" type="button" class="px-2.5 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 font-semibold border border-amber-400/30 transition">🔊 Тест сповіщення</button>
+          <span id="alertsModeLabel" class="text-amber-300 font-medium">Режим карти: Демо-симуляція</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Статусний банер -->
+  <div id="statusBanner" class="hidden w-full max-w-5xl mb-3 text-xs px-3.5 py-2 rounded-xl bg-amber-500/15 text-amber-200 border border-amber-400/25 anim-enter"></div>
+
+  <!-- ГОЛОВНА ОБОЛОНКА ВІДЖЕТА (АДАПТУЄТЬСЯ ПІД 2x2, 4x2, 4x4) -->
+  <main id="widgetShell" class="widget-shell w-full max-w-5xl rounded-3xl bg-slate-900/75 backdrop-blur-2xl border border-white/15 shadow-2xl p-4 sm:p-5">
+
+    <!-- Вкладки для компактного режиму 2x2 -->
+    <div id="compactTabs" class="hidden grid-cols-4 gap-1 mb-3 p-1 rounded-2xl bg-slate-950/60 border border-white/10">
+      <button type="button" data-tab="weather" class="compact-tab-btn py-1.5 rounded-xl text-[11px] font-semibold bg-sky-500 text-white transition">☀️ Погода</button>
+      <button type="button" data-tab="alerts" class="compact-tab-btn py-1.5 rounded-xl text-[11px] font-semibold text-slate-300 hover:text-white transition">🚨 Тривоги</button>
+      <button type="button" data-tab="power" class="compact-tab-btn py-1.5 rounded-xl text-[11px] font-semibold text-slate-300 hover:text-white transition">⚡ Світло</button>
+      <button type="button" data-tab="transport" class="compact-tab-btn py-1.5 rounded-xl text-[11px] font-semibold text-slate-300 hover:text-white transition">🚗 Рух</button>
+    </div>
+
+    <!-- Сітка модулів -->
+    <div id="widgetGrid" class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+
+      <!-- МОДУЛЬ 1: ПОГОДА (3 ЛОКАЦІЇ) -->
+      <section id="modWeather" class="lg:col-span-5 rounded-2xl bg-gradient-to-br from-sky-500/15 via-slate-900/60 to-indigo-500/15 border border-sky-400/20 p-3.5 flex flex-col justify-between">
+        <div class="flex items-center justify-between mb-2.5">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-bold uppercase tracking-wider text-sky-300">Погода</span>
+            <span class="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-semibold">LIVE · Open-Meteo</span>
+          </div>
+          <span id="weatherUpdated" class="text-[11px] text-slate-400">--:--</span>
+        </div>
+
+        <div id="weatherCards" class="space-y-2.5">
+          <!-- Картки 3 локацій рендеряться через JS -->
+        </div>
+
+        <!-- Блок курсів валют НБУ (UAH до EUR, USD, PLN з вибором) -->
+        <div class="mt-3 pt-3 border-t border-white/10">
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+            <span class="text-[11px] font-bold uppercase tracking-wider text-emerald-300">💱 Курс НБУ (UAH)</span>
+            <div class="flex items-center gap-1" id="currencySelectors">
+              <button type="button" data-curr="USD" class="curr-toggle px-2 py-0.5 rounded-md text-[10px] font-bold border transition">USD</button>
+              <button type="button" data-curr="EUR" class="curr-toggle px-2 py-0.5 rounded-md text-[10px] font-bold border transition">EUR</button>
+              <button type="button" data-curr="PLN" class="curr-toggle px-2 py-0.5 rounded-md text-[10px] font-bold border transition">PLN</button>
+            </div>
+          </div>
+          <div id="currencyGrid" class="grid grid-cols-3 gap-1.5"></div>
+        </div>
+
+        <!-- Блок середніх цін на пальне по Україні (Мінфін, 12.11.2026) -->
+        <div class="mt-3 pt-3 border-t border-white/10">
+          <div class="flex items-center justify-between gap-2 mb-2">
+            <span class="text-[11px] font-bold uppercase tracking-wider text-amber-300">⛽ АЗС України (грн/л)</span>
+            <a href="https://index.minfin.com.ua/ua/markets/fuel/" target="_blank" rel="noopener noreferrer" class="text-[10px] text-slate-400 hover:text-sky-300 underline">Мінфін (12.11)</a>
+          </div>
+          <div id="fuelGrid" class="grid grid-cols-2 sm:grid-cols-4 gap-1.5"></div>
+        </div>
+      </section>
+
+      <!-- МОДУЛЬ 2: КАРТА ТРИВОГ УКРАЇНИ -->
+      <section id="modAlerts" class="lg:col-span-7 rounded-2xl bg-slate-950/55 border border-white/10 p-3.5 flex flex-col justify-between">
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-bold uppercase tracking-wider text-rose-300">🚨 Карта тривог України</span>
+            <span id="alertCounterBadge" class="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-200 text-[11px] font-semibold border border-rose-400/25">0 регіонів</span>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <button id="toggleDemoAlertBtn" type="button" class="text-[11px] px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-slate-200 border border-white/10 transition">Змінити тест-тривоги</button>
+          </div>
+        </div>
+
+        <!-- Векторна D3-мапа України -->
+        <div class="relative w-full h-56 sm:h-64 rounded-xl bg-slate-900/70 border border-white/10 overflow-hidden flex items-center justify-center">
+          <svg id="ukraineMap" class="w-full h-full"></svg>
+          <div id="mapLoading" class="absolute inset-0 flex items-center justify-center text-xs text-slate-400 bg-slate-900/60">
+            Завантаження контурів областей України...
+          </div>
+          <div id="mapTooltip" class="hidden pointer-events-none absolute top-2 left-2 px-2.5 py-1.5 rounded-lg bg-slate-950/90 border border-white/15 text-xs text-white shadow-lg"></div>
+        </div>
+
+        <!-- Статус тривог для 3 вибраних точок -->
+        <div id="userRegionAlerts" class="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-2.5"></div>
+      </section>
+
+      <!-- МОДУЛЬ 3: ГРАФІКИ ВІДКЛЮЧЕНЬ СВІТЛА -->
+      <section id="modPower" class="lg:col-span-12 rounded-2xl bg-slate-950/55 border border-white/10 p-3.5">
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-bold uppercase tracking-wider text-amber-300">⚡ Графіки відключень світла (24 год)</span>
+            <span class="text-[11px] text-slate-400 hidden sm:inline">Натисніть на годину, щоб скоригувати графік під ваше обленерго</span>
+          </div>
+          <div class="flex items-center gap-3 text-[11px] text-slate-300">
+            <span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-emerald-500"></span> Є світло</span>
+            <span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-amber-400"></span> Можливе</span>
+            <span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-rose-500"></span> Відключення</span>
+          </div>
+        </div>
+
+        <div id="powerRows" class="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <!-- 3 локації світла рендеряться через JS -->
+        </div>
+      </section>
+
+      <!-- МОДУЛЬ 4: РУХ ТРАНСПОРТУ ТА ДОРОГИ (3 ЛОКАЦІЇ + УКРАЇНА) -->
+      <section id="modTransport" class="lg:col-span-12 rounded-2xl bg-slate-950/55 border border-white/10 p-3.5">
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-bold uppercase tracking-wider text-cyan-300">🚗 Рух транспорту та стан доріг</span>
+            <span class="text-[11px] text-slate-400 hidden sm:inline">Погодні умови руху + швидкий перехід на карту заторів</span>
+          </div>
+          <div class="flex items-center gap-2 text-[11px]">
+            <a href="https://www.google.com/maps/@49.0,31.5,6z/data=!5m1!1e1" target="_blank" rel="noopener noreferrer" class="px-2 py-0.5 rounded-lg bg-cyan-500/15 text-cyan-200 border border-cyan-400/25 hover:bg-cyan-500/25 transition">🗺️ Затори України</a>
+            <a href="https://www.uz.gov.ua/" target="_blank" rel="noopener noreferrer" class="px-2 py-0.5 rounded-lg bg-white/10 text-slate-200 border border-white/15 hover:bg-white/15 transition">🚆 Укрзалізниця</a>
+          </div>
+        </div>
+
+        <div id="transportGrid" class="grid grid-cols-1 md:grid-cols-4 gap-2.5"></div>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- Вбудований контейнер для тост-сповіщень -->
+  <div id="toastContainer" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-xs w-full pointer-events-none"></div>
+
+  <footer class="w-full max-w-5xl mt-3 flex flex-wrap items-center justify-between gap-2 px-1 text-[11px] text-slate-400">
+    <span>Погода: Open-Meteo API · Мапа: GeoJSON областей України (D3.js)</span>
+    <span>Для живих тривог підключіть токен <span class="text-slate-300">alerts.in.ua</span> у налаштуваннях</span>
+  </footer>
+
+  <script>
+    // ====== СТАН ДОДАТКА ======
+    const QUEUES = ['1.1', '1.2', '2.1', '2.2', '3.1', '3.2', '4.1', '4.2', '5.1', '5.2', '6.1', '6.2'];
+
+    const DEFAULT_STATE = {
+      format: '4x4',
+      compactTab: 'weather',
+      theme: 'dark',
+      nightMode: false,
+      autoRefresh: true,
+      selectedCurrencies: ['USD', 'EUR', 'PLN'],
+      notificationsEnabled: true,
+      proxyUrl: '',
+      alertsToken: '',
+      locations: [
+        { id: 0, role: 'Поточне розташування', name: 'Івано-Франківськ', oblast: 'Івано-Франківська область', lat: 48.9226, lon: 24.7111, queue: '1.1' },
+        { id: 1, role: 'Населений пункт 1', name: 'Київ', oblast: 'м. Київ', lat: 50.4501, lon: 30.5234, queue: '2.1' },
+        { id: 2, role: 'Населений пункт 2', name: 'Львів', oblast: 'Львівська область', lat: 49.8397, lon: 24.0297, queue: '3.2' }
+      ],
+      weather: [null, null, null],
+      activeAlerts: ['Харківська область', 'Сумська область', 'Донецька область', 'Запорізька область'],
+      powerSchedules: {}
+    };
+
+    function loadState() {
+      try {
+        const raw = localStorage.getItem('ua_smart_widget_v2');
+        if (!raw) return structuredClone(DEFAULT_STATE);
+        const parsed = JSON.parse(raw);
+        return {
+          ...structuredClone(DEFAULT_STATE),
+          ...parsed,
+          locations: parsed.locations?.length === 3 ? parsed.locations : structuredClone(DEFAULT_STATE.locations)
+        };
+      } catch {
+        return structuredClone(DEFAULT_STATE);
+      }
+    }
+
+    function saveState() {
+      try {
+        localStorage.setItem('ua_smart_widget_v2', JSON.stringify({
+          format: state.format,
+          compactTab: state.compactTab,
+          theme: state.theme,
+          nightMode: state.nightMode,
+          autoRefresh: state.autoRefresh,
+          selectedCurrencies: state.selectedCurrencies,
+          notificationsEnabled: state.notificationsEnabled,
+          proxyUrl: state.proxyUrl,
+          alertsToken: state.alertsToken,
+          locations: state.locations,
+          powerSchedules: state.powerSchedules
+        }));
+      } catch {
+        // Canvas iframe може обмежувати localStorage
+      }
+    }
+
+    let state = loadState();
+
+    // Генерація базового 24-годинного графіка для черги (0 = світло, 1 = можливе, 2 = відключення)
+    function getScheduleForLocation(idx) {
+      const loc = state.locations[idx];
+      const key = `${idx}_${loc.queue}`;
+      if (state.powerSchedules[key] && state.powerSchedules[key].length === 24) {
+        return state.powerSchedules[key];
+      }
+      const shift = (QUEUES.indexOf(loc.queue) * 2 + idx) % 6;
+      const arr = Array.from({ length: 24 }, (_, h) => {
+        const mod = (h + shift) % 6;
+        if (mod === 0 || mod === 1) return 2; // Відключення 2 год
+        if (mod === 2) return 1; // Можливе 1 год
+        return 0; // Є світло 3 год
+      });
+      state.powerSchedules[key] = arr;
+      return arr;
+    }
+
+    // ====== ДОПОМІЖНІ ФУНКЦІЇ ======
+    const statusBanner = document.getElementById('statusBanner');
+    function showBanner(msg) {
+      statusBanner.textContent = msg;
+      statusBanner.classList.remove('hidden');
+    }
+    function hideBanner() {
+      statusBanner.classList.add('hidden');
+    }
+
+    function updateClock() {
+      const now = new Date();
+      const days = ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+      const dayName = days[now.getDay()];
+      const timeStr = now.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
+      document.getElementById('clockBadge').textContent = `${dayName} · ${timeStr}`;
+    }
+    updateClock();
+    setInterval(updateClock, 15000);
+
+    function decodeWMO(code) {
+      if (code === 0) return { text: 'Ясно', emoji: '☀️' };
+      if (code === 1 || code === 2) return { text: 'Мінлива хмарність', emoji: '⛅' };
+      if (code === 3) return { text: 'Хмарно', emoji: '☁️' };
+      if (code === 45 || code === 48) return { text: 'Туман', emoji: '🌫️' };
+      if (code >= 51 && code <= 57) return { text: 'Мряка', emoji: '🌦️' };
+      if (code >= 61 && code <= 67) return { text: 'Дощ', emoji: '🌧️' };
+      if (code >= 71 && code <= 77) return { text: 'Сніг', emoji: '❄️' };
+      if (code >= 80 && code <= 82) return { text: 'Злива', emoji: '⛈️' };
+      if (code >= 95) return { text: 'Гроза', emoji: '🌩️' };
+      return { text: 'Хмарно', emoji: '🌤️' };
+    }
+
+    // ====== АДАПТИВНІСТЬ ФОРМАТІВ (2x2, 4x2, 4x4) ======
+    const widgetShell = document.getElementById('widgetShell');
+    const widgetGrid = document.getElementById('widgetGrid');
+    const compactTabs = document.getElementById('compactTabs');
+    const modWeather = document.getElementById('modWeather');
+    const modAlerts = document.getElementById('modAlerts');
+    const modPower = document.getElementById('modPower');
+    const modTransport = document.getElementById('modTransport');
+
+    function applyFormat() {
+      document.querySelectorAll('.format-btn').forEach(btn => {
+        const active = btn.dataset.format === state.format;
+        btn.className = `format-btn px-2.5 py-1 rounded-lg text-xs font-semibold transition ${
+          active ? 'bg-sky-500 text-white shadow' : 'text-slate-300 hover:text-white'
+        }`;
+      });
+
+      if (state.format === '2x2') {
+        widgetShell.className = 'widget-shell w-full max-w-sm rounded-3xl bg-slate-900/75 backdrop-blur-2xl border border-white/15 shadow-2xl p-3.5';
+        widgetGrid.className = 'grid grid-cols-1 gap-3';
+        compactTabs.classList.remove('hidden');
+        compactTabs.classList.add('grid');
+        modWeather.className = state.compactTab === 'weather' ? 'rounded-2xl bg-gradient-to-br from-sky-500/15 via-slate-900/60 to-indigo-500/15 border border-sky-400/20 p-3 anim-enter' : 'hidden';
+        modAlerts.className = state.compactTab === 'alerts' ? 'rounded-2xl bg-slate-950/55 border border-white/10 p-3 anim-enter' : 'hidden';
+        modPower.className = state.compactTab === 'power' ? 'rounded-2xl bg-slate-950/55 border border-white/10 p-3 anim-enter' : 'hidden';
+        modTransport.className = state.compactTab === 'transport' ? 'rounded-2xl bg-slate-950/55 border border-white/10 p-3 anim-enter' : 'hidden';
+      } else if (state.format === '4x2') {
+        widgetShell.className = 'widget-shell w-full max-w-3xl rounded-3xl bg-slate-900/75 backdrop-blur-2xl border border-white/15 shadow-2xl p-4';
+        widgetGrid.className = 'grid grid-cols-1 md:grid-cols-12 gap-3';
+        compactTabs.classList.add('hidden');
+        compactTabs.classList.remove('grid');
+        modWeather.className = 'md:col-span-6 rounded-2xl bg-gradient-to-br from-sky-500/15 via-slate-900/60 to-indigo-500/15 border border-sky-400/20 p-3 anim-enter';
+        modAlerts.className = 'md:col-span-6 rounded-2xl bg-slate-950/55 border border-white/10 p-3 anim-enter';
+        modPower.className = 'md:col-span-12 rounded-2xl bg-slate-950/55 border border-white/10 p-3 anim-enter';
+        modTransport.className = 'md:col-span-12 rounded-2xl bg-slate-950/55 border border-white/10 p-3 anim-enter';
+      } else {
+        widgetShell.className = 'widget-shell w-full max-w-5xl rounded-3xl bg-slate-900/75 backdrop-blur-2xl border border-white/15 shadow-2xl p-4 sm:p-5';
+        widgetGrid.className = 'grid grid-cols-1 lg:grid-cols-12 gap-4';
+        compactTabs.classList.add('hidden');
+        compactTabs.classList.remove('grid');
+        modWeather.className = 'lg:col-span-5 rounded-2xl bg-gradient-to-br from-sky-500/15 via-slate-900/60 to-indigo-500/15 border border-sky-400/20 p-3.5 flex flex-col justify-between anim-enter';
+        modAlerts.className = 'lg:col-span-7 rounded-2xl bg-slate-950/55 border border-white/10 p-3.5 flex flex-col justify-between anim-enter';
+        modPower.className = 'lg:col-span-12 rounded-2xl bg-slate-950/55 border border-white/10 p-3.5 anim-enter';
+        modTransport.className = 'lg:col-span-12 rounded-2xl bg-slate-950/55 border border-white/10 p-3.5 anim-enter';
+      }
+
+      document.querySelectorAll('.compact-tab-btn').forEach(btn => {
+        const active = btn.dataset.tab === state.compactTab;
+        btn.className = `compact-tab-btn py-1.5 rounded-xl text-xs font-semibold transition ${
+          active ? 'bg-sky-500 text-white shadow' : 'text-slate-300 hover:text-white'
+        }`;
+      });
+
+      if (window.__uaGeoData) renderUkraineMap();
+    }
+
+    document.querySelectorAll('.format-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        state.format = btn.dataset.format;
+        saveState();
+        applyFormat();
+      });
+    });
+
+    document.querySelectorAll('.compact-tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        state.compactTab = btn.dataset.tab;
+        saveState();
+        applyFormat();
+      });
+    });
+
+    // ====== ПОГОДА (OPEN-METEO ДЛЯ 3 ЛОКАЦІЙ) ======
+    async function fetchAllWeather() {
+      const refreshIcon = document.getElementById('refreshIcon');
+      refreshIcon.classList.add('animate-spin');
+
+      try {
+        const requests = state.locations.map(loc =>
+          fetch(`https://api.open-meteo.com/v1/forecast?latitude=${loc.lat}&longitude=${loc.lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&timezone=auto`)
+            .then(r => {
+              if (!r.ok) throw new Error('API error');
+              return r.json();
+            })
+        );
+        const results = await Promise.all(requests);
+        state.weather = results.map(r => r.current);
+        document.getElementById('weatherUpdated').textContent = new Date().toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
+        renderWeatherCards();
+        renderTransport();
+      } catch {
+        showBanner('Не вдалося оновити погоду з Open-Meteo. Перевірте інтернет і натисніть «Оновити».');
+      } finally {
+        refreshIcon.classList.remove('animate-spin');
+      }
+    }
+
+    function getWeatherAdvice(w) {
+      if (!w) return 'Очікуємо оновлення прогнозу...';
+      const t = w.temperature_2m;
+      const wind = w.wind_speed_10m;
+      const code = w.weather_code;
+      if (code >= 51 && code <= 82 || code >= 95) return '☔ Візьміть парасольку або дощовик — очікуються опади.';
+      if (t <= 0) return '🧣 Морозно: вдягніть теплу куртку, шапку та рукавиці.';
+      if (wind >= 25) return '🧥 Вітряно — стане у пригоді вітровка або капюшон.';
+      if (t < 10) return '🧥 Прохолодно — краще одягнутися багатошарово.';
+      if (t >= 25) return '🕶️ Спекотно — пийте більше води та не забудьте окуляри.';
+      return '✨ Комфортна погода для справ і прогулянок.';
+    }
+
+    function getGalaxyWeatherFX(code) {
+      if (code === 0) {
+        return {
+          bg: 'from-amber-500/20 via-sky-500/10 to-slate-950/70',
+          fx: '<div class="pointer-events-none absolute -top-4 -right-4 w-16 h-16 rounded-full bg-amber-400/25 blur-md galaxy-orb"></div><div class="pointer-events-none absolute top-2 right-2 w-8 h-8 rounded-full border border-amber-300/30 border-dashed galaxy-sun-ring"></div>'
+        };
+      }
+      if ((code >= 51 && code <= 82) || code >= 95) {
+        return {
+          bg: 'from-sky-600/20 via-indigo-900/30 to-slate-950/80',
+          fx: '<div class="pointer-events-none absolute top-1 right-6 text-[10px] text-sky-300/70 galaxy-rain-drop">💧</div><div class="pointer-events-none absolute top-2 right-12 text-[10px] text-sky-300/60 galaxy-rain-drop" style="animation-delay:0.5s">💧</div>'
+        };
+      }
+      return {
+        bg: 'from-sky-500/15 via-slate-900/60 to-indigo-950/70',
+        fx: '<div class="pointer-events-none absolute -top-3 -right-3 w-14 h-14 rounded-full bg-sky-400/20 blur-md galaxy-orb"></div>'
+      };
+    }
+
+    function renderWeatherCards() {
+      const container = document.getElementById('weatherCards');
+      container.innerHTML = state.locations.map((loc, idx) => {
+        const w = state.weather[idx];
+        const wmo = w ? decodeWMO(w.weather_code) : { text: 'Завантаження...', emoji: '⏳' };
+        const temp = w ? `${Math.round(w.temperature_2m)}°` : '--°';
+        const flik = w ? `${Math.round(w.apparent_temperature)}°` : '--°';
+        const wind = w ? `${Math.round(w.wind_speed_10m)} км/г` : '--';
+        const hum = w ? `${Math.round(w.relative_humidity_2m)}%` : '--%';
+        const advice = getWeatherAdvice(w);
+        const galaxy = getGalaxyWeatherFX(w ? w.weather_code : 1);
+        const badgeColor = idx === 0 ? 'text-sky-300' : idx === 1 ? 'text-indigo-300' : 'text-emerald-300';
+
+        return `
+          <div class="weather-galaxy-card relative overflow-hidden rounded-2xl bg-gradient-to-br ${galaxy.bg} border border-white/12 p-3 hover:border-white/25 transition">
+            ${galaxy.fx}
+            <div class="relative flex items-center justify-between gap-2">
+              <div class="min-w-0">
+                <div class="text-[10px] font-semibold uppercase tracking-wide ${badgeColor}">${loc.role}</div>
+                <div class="text-sm font-bold text-white truncate">${loc.name}</div>
+                <div class="flex flex-wrap items-center gap-1.5 mt-1 text-[11px] text-slate-200">
+                  <span>${wmo.text}</span>
+                  <span class="px-1.5 py-0.5 rounded-md bg-white/10">💧 ${hum}</span>
+                  <span class="px-1.5 py-0.5 rounded-md bg-white/10">💨 ${wind}</span>
+                </div>
+              </div>
+              <div class="text-right shrink-0">
+                <div class="flex items-center justify-end gap-1.5">
+                  <span class="text-2xl leading-none anim-float">${wmo.emoji}</span>
+                  <span class="text-2xl font-extrabold text-white tabular-nums">${temp}</span>
+                </div>
+                <div class="text-[10px] text-slate-400">Відчувається ${flik}</div>
+              </div>
+            </div>
+            <div class="relative mt-2 pt-1.5 border-t border-white/10 text-[11px] text-sky-200/90">${advice}</div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // Пошук міста через Open-Meteo Geocoding API
+    async function searchCity(idx, query) {
+      if (!query.trim()) return;
+      hideBanner();
+      try {
+        const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query.trim())}&count=5&language=uk&format=json`;
+        const res = await fetch(url);
+        const data = await res.json();
+        const uaMatch = (data.results || []).find(r => r.country_code === 'UA') || (data.results || [])[0];
+        if (!uaMatch) {
+          showBanner(`Населений пункт «${query}» не знайдено. Спробуйте іншу назву.`);
+          return;
+        }
+        state.locations[idx].name = uaMatch.name;
+        state.locations[idx].oblast = uaMatch.admin1 || uaMatch.name;
+        state.locations[idx].lat = Number(uaMatch.latitude.toFixed(4));
+        state.locations[idx].lon = Number(uaMatch.longitude.toFixed(4));
+        saveState();
+        syncSettingsUI();
+        fetchAllWeather();
+        renderUserRegionAlerts();
+        renderPowerRows();
+        if (window.__uaGeoData) renderUkraineMap();
+      } catch {
+        showBanner('Помилка пошуку населеного пункту.');
+      }
+    }
+
+    // ====== КАРТА ТРИВОГ УКРАЇНИ (D3 + GeoJSON) ======
+    const OBLAST_ALIASES = {
+      'vinnytsia': 'Вінницька область', 'vinnytska': 'Вінницька область',
+      'volyn': 'Волинська область', 'volynska': 'Волинська область',
+      'dnipropetrovsk': 'Дніпропетровська область', 'dnipropetrovska': 'Дніпропетровська область',
+      'donetsk': 'Донецька область', 'donetska': 'Донецька область',
+      'zhytomyr': 'Житомирська область', 'zhytomyrska': 'Житомирська область',
+      'zakarpattia': 'Закарпатська область', 'zakarpatska': 'Закарпатська область', 'transcarpathia': 'Закарпатська область',
+      'zaporizhia': 'Запорізька область', 'zaporizhzhia': 'Запорізька область', 'zaporizka': 'Запорізька область',
+      'ivano-frankivsk': 'Івано-Франківська область', 'ivano_frankivsk': 'Івано-Франківська область', 'ivano-frankivska': 'Івано-Франківська область',
+      'kyiv': 'Київська область', 'kiev': 'Київська область', 'kyivska': 'Київська область',
+      'kirovohrad': 'Кіровоградська область', 'kirovohradska': 'Кіровоградська область', 'kirovograd': 'Кіровоградська область',
+      'luhansk': 'Луганська область', 'luhanska': 'Луганська область', 'lugansk': 'Луганська область',
+      'lviv': 'Львівська область', 'lvivska': 'Львівська область',
+      'mykolaiv': 'Миколаївська область', 'mykolaivska': 'Миколаївська область', 'nikolaev': 'Миколаївська область',
+      'odesa': 'Одеська область', 'odessa': 'Одеська область', 'odeska': 'Одеська область',
+      'poltava': 'Полтавська область', 'poltavska': 'Полтавська область',
+      'rivne': 'Рівненська область', 'rivnenska': 'Рівненська область',
+      'sumy': 'Сумська область', 'sumska': 'Сумська область',
+      'ternopil': 'Тернопільська область', 'ternopilska': 'Тернопільська область',
+      'kharkiv': 'Харківська область', 'kharkivska': 'Харківська область',
+      'kherson': 'Херсонська область', 'khersonska': 'Херсонська область',
+      'khmelnytskyi': 'Хмельницька область', 'khmelnytska': 'Хмельницька область', 'khmelnitsky': 'Хмельницька область',
+      'cherkasy': 'Черкаська область', 'cherkaska': 'Черкаська область',
+      'chernivtsi': 'Чернівецька область', 'chernivetska': 'Чернівецька область',
+      'chernihiv': 'Чернігівська область', 'chernihivska': 'Чернігівська область',
+      'crimea': 'Автономна Республіка Крим', 'krym': 'Автономна Республіка Крим'
+    };
+
+    function resolveOblastName(props) {
+      const raw = (props.name_uk || props.NAME_UK || props.name || props.NAME_1 || props.region || '').toString();
+      if (/[А-Яа-яІіЇїЄєҐґ]/.test(raw)) return raw;
+      const key = raw.toLowerCase().replace(/\s+oblast$/i, '').replace(/['`’]/g, '').trim();
+      for (const [alias, ukName] of Object.entries(OBLAST_ALIASES)) {
+        if (key.includes(alias)) return ukName;
+      }
+      return raw || 'Область';
+    }
+
+    function isAlertActive(regionName) {
+      const norm = regionName.toLowerCase();
+      return state.activeAlerts.some(a => {
+        const al = a.toLowerCase();
+        return norm.includes(al.split(' ')[0]) || al.includes(norm.split(' ')[0]);
+      });
+    }
+
+    async function loadUkraineGeoJSON() {
+      const mapLoading = document.getElementById('mapLoading');
+      try {
+        const res = await fetch('https://cdn.jsdelivr.net/gh/EugeneBorshch/ukraine_geojson@master/UA_FULL_Ukraine.geojson');
+        if (!res.ok) throw new Error('GeoJSON load error');
+        window.__uaGeoData = await res.json();
+        mapLoading.classList.add('hidden');
+        renderUkraineMap();
+      } catch {
+        mapLoading.textContent = 'Не вдалося завантажити мапу України.';
+      }
+    }
+
+    function renderUkraineMap() {
+      const geo = window.__uaGeoData;
+      if (!geo) return;
+      const svgEl = document.getElementById('ukraineMap');
+      const rect = svgEl.getBoundingClientRect();
+      const width = Math.max(rect.width || 460, 260);
+      const height = Math.max(rect.height || 240, 180);
+
+      const svg = d3.select(svgEl);
+      svg.selectAll('*').remove();
+      svg.attr('viewBox', `0 0 ${width} ${height}`);
+
+      const projection = d3.geoMercator().fitExtent([[10, 10], [width - 10, height - 10]], geo);
+      const pathGen = d3.geoPath().projection(projection);
+      const tooltip = document.getElementById('mapTooltip');
+
+      const userOblasts = state.locations.map(l => l.oblast.toLowerCase());
+
+      svg.selectAll('path')
+        .data(geo.features)
+        .enter()
+        .append('path')
+        .attr('d', pathGen)
+        .attr('class', d => {
+          const name = resolveOblastName(d.properties || {});
+          return `oblast-path ${isAlertActive(name) ? 'oblast-alert' : ''}`;
+        })
+        .attr('fill', d => {
+          const name = resolveOblastName(d.properties || {});
+          if (isAlertActive(name)) return '#e11d48';
+          const isUser = userOblasts.some(u => name.toLowerCase().includes(u.split(' ')[0]));
+          return isUser ? '#0284c7' : '#1e293b';
+        })
+        .attr('stroke', d => {
+          const name = resolveOblastName(d.properties || {});
+          const isUser = userOblasts.some(u => name.toLowerCase().includes(u.split(' ')[0]));
+          return isUser ? '#38bdf8' : '#475569';
+        })
+        .attr('stroke-width', 1.1)
+        .on('mouseenter', (_, d) => {
+          const name = resolveOblastName(d.properties || {});
+          const active = isAlertActive(name);
+          tooltip.innerHTML = `<span class="font-semibold">${name}</span> · ${active ? '<span class="text-rose-400">Тривога</span>' : '<span class="text-emerald-400">Тихо</span>'}`;
+          tooltip.classList.remove('hidden');
+        })
+        .on('mouseleave', () => {
+          tooltip.classList.add('hidden');
+        })
+        .on('click', (_, d) => {
+          if (state.alertsToken) return;
+          const name = resolveOblastName(d.properties || {});
+          if (isAlertActive(name)) {
+            state.activeAlerts = state.activeAlerts.filter(a => !a.toLowerCase().includes(name.toLowerCase().split(' ')[0]));
+          } else {
+            state.activeAlerts.push(name);
+          }
+          renderUkraineMap();
+          renderUserRegionAlerts();
+        });
+
+      document.getElementById('alertCounterBadge').textContent = `${state.activeAlerts.length} регіонів`;
+    }
+
+    function renderUserRegionAlerts() {
+      const container = document.getElementById('userRegionAlerts');
+      container.innerHTML = state.locations.map(loc => {
+        const active = isAlertActive(loc.oblast);
+        return `
+          <div class="rounded-xl px-2.5 py-2 border ${active ? 'bg-rose-500/15 border-rose-400/35' : 'bg-emerald-500/10 border-emerald-400/25'} flex items-center justify-between gap-2">
+            <div class="min-w-0">
+              <div class="text-[10px] text-slate-400 truncate">${loc.role}</div>
+              <div class="text-xs font-bold text-white truncate">${loc.name}</div>
+            </div>
+            <span class="shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-full ${active ? 'bg-rose-500 text-white animate-pulse' : 'bg-emerald-500/20 text-emerald-300'}">
+              ${active ? 'ТРИВОГА' : 'Тихо'}
+            </span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function fetchFromProxy() {
+      if (!state.proxyUrl) return false;
+      const modeLabel = document.getElementById('alertsModeLabel');
+      try {
+        const queues = state.locations.map(l => l.queue).join(',');
+        const sep = state.proxyUrl.includes('?') ? '&' : '?';
+        const res = await fetch(`${state.proxyUrl}${sep}action=all&queues=${encodeURIComponent(queues)}`);
+        if (!res.ok) throw new Error('Proxy HTTP error');
+        const data = await res.json();
+        if (Array.isArray(data.alerts)) {
+          state.activeAlerts = [...new Set(data.alerts)];
+          modeLabel.textContent = 'Режим: LIVE проксі (Apps Script)';
+          modeLabel.className = 'text-emerald-300 font-medium';
+          renderUserRegionAlerts();
+          checkAlertTransitions();
+          if (window.__uaGeoData) renderUkraineMap();
+        }
+        if (data.power && typeof data.power === 'object') {
+          state.locations.forEach((loc, idx) => {
+            const arr = data.power[loc.queue];
+            if (Array.isArray(arr) && arr.length === 24) {
+              state.powerSchedules[`${idx}_${loc.queue}`] = arr;
+            }
+          });
+          saveState();
+          renderPowerRows();
+        }
+        return true;
+      } catch {
+        showBanner('Не вдалося отримати дані з проксі Apps Script. Перевірте URL та права доступу («Усі»).');
+        return false;
+      }
+    }
+
+    async function fetchLiveAlerts() {
+      if (state.proxyUrl) {
+        const ok = await fetchFromProxy();
+        if (ok) return;
+      }
+      const modeLabel = document.getElementById('alertsModeLabel');
+      if (!state.alertsToken) {
+        modeLabel.textContent = 'Режим карти: Демо-симуляція (клік по області змінює стан)';
+        renderUserRegionAlerts();
+        checkAlertTransitions();
+        if (window.__uaGeoData) renderUkraineMap();
+        return;
+      }
+      try {
+        const res = await fetch(`https://api.alerts.in.ua/v1/alerts/active.json?token=${encodeURIComponent(state.alertsToken)}`);
+        if (!res.ok) throw new Error('Token error');
+        const data = await res.json();
+        const oblasts = (data.alerts || []).map(a => a.location_oblast || a.location_title).filter(Boolean);
+        state.activeAlerts = [...new Set(oblasts)];
+        modeLabel.textContent = 'Режим карти: LIVE alerts.in.ua';
+        modeLabel.className = 'text-emerald-300 font-medium';
+        renderUserRegionAlerts();
+        if (window.__uaGeoData) renderUkraineMap();
+      } catch {
+        showBanner('Не вдалося завантажити живі тривоги з alerts.in.ua (перевірте токен або CORS). Показано демо-дані.');
+      }
+    }
+
+    // ====== ГРАФІКИ ВІДКЛЮЧЕНЬ СВІТЛА (24 ГОДИНИ) ======
+    function renderPowerRows() {
+      const now = new Date();
+      const currentHour = now.getHours();
+      const currentMin = now.getMinutes();
+      const container = document.getElementById('powerRows');
+
+      container.innerHTML = state.locations.map((loc, idx) => {
+        const sched = getScheduleForLocation(idx);
+        const curStatus = sched[currentHour];
+        let nextChangeHour = null;
+        for (let offset = 1; offset <= 24; offset++) {
+          const h = (currentHour + offset) % 24;
+          if (sched[h] !== curStatus) {
+            nextChangeHour = offset;
+            break;
+          }
+        }
+        const minsLeft = nextChangeHour !== null ? (nextChangeHour * 60 - currentMin) : 0;
+        const hrsText = Math.floor(minsLeft / 60);
+        const minsText = minsLeft % 60;
+        const countdown = nextChangeHour !== null ? `${hrsText}г ${minsText}хв` : 'без змін';
+
+        const statusBadge = curStatus === 0
+          ? '<span class="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold">Є СВІТЛО</span>'
+          : curStatus === 1
+          ? '<span class="px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-200 text-[10px] font-bold">МОЖЛИВЕ</span>'
+          : '<span class="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 text-[10px] font-bold">ВІДКЛЮЧЕННЯ</span>';
+
+        const barsHtml = sched.map((val, h) => {
+          const bg = val === 0 ? 'bg-emerald-500/80 hover:bg-emerald-400' : val === 1 ? 'bg-amber-400/85 hover:bg-amber-300' : 'bg-rose-500/85 hover:bg-rose-400';
+          const isNow = h === currentHour ? 'ring-2 ring-white scale-y-110 z-10' : '';
+          return `<button type="button" data-loc="${idx}" data-hour="${h}" title="${String(h).padStart(2, '0')}:00 — натисніть для зміни" class="power-cell h-6 flex-1 rounded-sm ${bg} ${isNow} transition"></button>`;
+        }).join('');
+
+        return `
+          <div class="rounded-xl bg-slate-900/80 border border-white/10 p-3 space-y-2">
+            <div class="flex items-center justify-between gap-2">
+              <div class="min-w-0">
+                <div class="text-[10px] text-slate-400 truncate">${loc.role} · Черга ${loc.queue}</div>
+                <div class="text-sm font-bold text-white truncate">${loc.name}</div>
+              </div>
+              ${statusBadge}
+            </div>
+            <div class="flex items-center gap-0.5 py-1">${barsHtml}</div>
+            <div class="flex items-center justify-between text-[11px] text-slate-400">
+              <span>00:00 — 23:00</span>
+              <span>До зміни: <strong class="text-slate-200">${countdown}</strong></span>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      container.querySelectorAll('.power-cell').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const idx = Number(btn.dataset.loc);
+          const hour = Number(btn.dataset.hour);
+          const sched = getScheduleForLocation(idx);
+          sched[hour] = (sched[hour] + 1) % 3;
+          saveState();
+          renderPowerRows();
+        });
+      });
+    }
+
+    // ====== НАЛАШТУВАННЯ ТА ПОДІЇ ======
+    function syncSettingsUI() {
+      document.getElementById('city1NameBadge').textContent = state.locations[1].name;
+      document.getElementById('city2NameBadge').textContent = state.locations[2].name;
+      document.getElementById('proxyUrlInput').value = state.proxyUrl || '';
+      document.getElementById('alertsTokenInput').value = state.alertsToken || '';
+      document.querySelectorAll('.queue-select').forEach(sel => {
+        const idx = Number(sel.dataset.idx);
+        sel.innerHTML = QUEUES.map(q => `<option value="${q}" ${state.locations[idx].queue === q ? 'selected' : ''}>Черга ${q}</option>`).join('');
+      });
+    }
+
+    document.querySelectorAll('.queue-select').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const idx = Number(sel.dataset.idx);
+        state.locations[idx].queue = sel.value;
+        saveState();
+        renderPowerRows();
+      });
+    });
+
+    document.getElementById('settingsToggleBtn').addEventListener('click', () => {
+      document.getElementById('settingsPanel').classList.toggle('hidden');
+    });
+    document.getElementById('closeSettingsBtn').addEventListener('click', () => {
+      document.getElementById('settingsPanel').classList.add('hidden');
+    });
+
+    document.getElementById('citySelect').addEventListener('change', (e) => {
+      hideBanner();
+      const [latStr, lonStr, oblast] = e.target.value.split(',');
+      const label = e.target.options[e.target.selectedIndex].text;
+      state.locations[0].name = label;
+      state.locations[0].oblast = oblast;
+      state.locations[0].lat = Number(latStr);
+      state.locations[0].lon = Number(lonStr);
+      saveState();
+      fetchAllWeather();
+      renderUserRegionAlerts();
+      renderPowerRows();
+      if (window.__uaGeoData) renderUkraineMap();
+    });
+
+    document.getElementById('gpsBtn').addEventListener('click', () => {
+      hideBanner();
+      if (!navigator.geolocation) {
+        showBanner('Геолокація не підтримується. Оберіть місто зі списку.');
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          state.locations[0].lat = Number(pos.coords.latitude.toFixed(4));
+          state.locations[0].lon = Number(pos.coords.longitude.toFixed(4));
+          state.locations[0].name = `GPS (${pos.coords.latitude.toFixed(2)}, ${pos.coords.longitude.toFixed(2)})`;
+          saveState();
+          fetchAllWeather();
+          renderPowerRows();
+        },
+        () => {
+          showBanner('Браузер обмежив доступ до GPS у вікні перегляду — оберіть місто поруч у списку.');
+        },
+        { timeout: 6000 }
+      );
+    });
+
+    document.getElementById('findCity1Btn').addEventListener('click', () => searchCity(1, document.getElementById('searchCity1').value));
+    document.getElementById('findCity2Btn').addEventListener('click', () => searchCity(2, document.getElementById('searchCity2').value));
+
+    document.getElementById('saveProxyBtn').addEventListener('click', () => {
+      state.proxyUrl = document.getElementById('proxyUrlInput').value.trim();
+      saveState();
+      hideBanner();
+      fetchLiveAlerts();
+    });
+
+    document.getElementById('saveTokenBtn').addEventListener('click', () => {
+      state.alertsToken = document.getElementById('alertsTokenInput').value.trim();
+      saveState();
+      fetchLiveAlerts();
+    });
+
+    document.getElementById('toggleDemoAlertBtn').addEventListener('click', () => {
+      const presets = [
+        ['Харківська область', 'Сумська область', 'Донецька область', 'Запорізька область'],
+        ['м. Київ', 'Київська область', 'Чернігівська область', 'Полтавська область', 'Дніпропетровська область'],
+        ['Івано-Франківська область', 'Львівська область', 'Тернопільська область', 'Одеська область']
+      ];
+      const nextIdx = (presets.findIndex(p => p[0] === state.activeAlerts[0]) + 1) % presets.length;
+      state.activeAlerts = presets[nextIdx];
+      renderUkraineMap();
+      renderUserRegionAlerts();
+      checkAlertTransitions();
+    });
+
+    document.getElementById('refreshBtn').addEventListener('click', () => {
+      hideBanner();
+      fetchAllWeather();
+      fetchLiveAlerts();
+      fetchCurrencies();
+      renderPowerRows();
+    });
+
+    // ====== ЗВУКОВІ ТА PUSH-СПОВІЩЕННЯ ======
+    let audioCtx = null;
+    let prevAlertStates = state.locations.map(l => isAlertActive(l.oblast));
+    let lastPowerWarnHour = -1;
+
+    function playTone(type) {
+      if (!state.notificationsEnabled) return;
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+        if (!audioCtx) audioCtx = new Ctx();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+
+        const now = audioCtx.currentTime;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        if (type === 'alert') {
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(660, now);
+          osc.frequency.setValueAtTime(880, now + 0.16);
+          osc.frequency.setValueAtTime(660, now + 0.32);
+          gain.gain.setValueAtTime(0.14, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.52);
+          osc.start(now);
+          osc.stop(now + 0.52);
+        } else {
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(523.25, now);
+          osc.frequency.setValueAtTime(659.25, now + 0.12);
+          gain.gain.setValueAtTime(0.11, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+          osc.start(now);
+          osc.stop(now + 0.35);
+        }
+      } catch {
+        // Ігноруємо, якщо аудіо заблоковано до взаємодії
+      }
+    }
+
+    function showToast(title, body, kind = 'info') {
+      const container = document.getElementById('toastContainer');
+      const card = document.createElement('div');
+      const colors = kind === 'alert'
+        ? 'bg-rose-950/95 border-rose-400/50 text-rose-100'
+        : 'bg-amber-950/95 border-amber-400/50 text-amber-100';
+      card.className = `pointer-events-auto rounded-2xl border p-3 shadow-2xl backdrop-blur-xl anim-enter ${colors}`;
+      card.innerHTML = `<div class="text-xs font-bold">${title}</div><div class="text-[11px] opacity-90 mt-0.5">${body}</div>`;
+      container.appendChild(card);
+      setTimeout(() => card.remove(), 6000);
+    }
+
+    function triggerNotification(title, body, kind = 'info') {
+      if (!state.notificationsEnabled) return;
+      playTone(kind);
+      showToast(title, body, kind);
+      try {
+        if ('Notification' in window && Notification.permission === 'granted') {
+          new Notification(title, { body });
+        }
+      } catch {
+        // Системні сповіщення можуть бути обмежені у iframe
+      }
+    }
+
+    function checkAlertTransitions() {
+      const currentStates = state.locations.map(l => isAlertActive(l.oblast));
+      currentStates.forEach((active, idx) => {
+        if (active && !prevAlertStates[idx]) {
+          triggerNotification('🚨 Повітряна тривога!', `${state.locations[idx].name} (${state.locations[idx].oblast})`, 'alert');
+        }
+      });
+      prevAlertStates = currentStates;
+    }
+
+    function checkPowerWarnings() {
+      const now = new Date();
+      const h = now.getHours();
+      const m = now.getMinutes();
+      if (m < 45 || lastPowerWarnHour === h) return;
+      const nextH = (h + 1) % 24;
+      const soonOff = state.locations.filter((_, idx) => {
+        const sched = getScheduleForLocation(idx);
+        return sched[h] === 0 && sched[nextH] === 2;
+      });
+      if (soonOff.length > 0) {
+        lastPowerWarnHour = h;
+        const names = soonOff.map(l => l.name).join(', ');
+        triggerNotification('⚡ Скоро відключення світла', `Менш ніж за 15 хв можливе вимкнення: ${names}`, 'power');
+      }
+    }
+
+    function updateNotifyUI() {
+      const btn = document.getElementById('notifyToggleBtn');
+      const icon = document.getElementById('notifyIcon');
+      const label = document.getElementById('notifyLabel');
+      if (state.notificationsEnabled) {
+        btn.className = 'inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 text-xs font-semibold border border-amber-400/30 transition';
+        icon.textContent = '🔔';
+        label.textContent = 'Сповіщ.: увімк.';
+      } else {
+        btn.className = 'inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-slate-300 text-xs font-medium border border-white/10 transition';
+        icon.textContent = '🔕';
+        label.textContent = 'Сповіщ.: вимк.';
+      }
+    }
+
+    document.getElementById('notifyToggleBtn').addEventListener('click', () => {
+      state.notificationsEnabled = !state.notificationsEnabled;
+      saveState();
+      updateNotifyUI();
+      if (state.notificationsEnabled) {
+        try {
+          if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission().catch(() => {});
+          }
+        } catch {}
+        triggerNotification('🔔 Сповіщення активовано', 'Ви отримуватимете сигнали про тривоги та відключення світла.', 'power');
+      }
+    });
+
+    document.getElementById('testNotifyBtn').addEventListener('click', () => {
+      if (!state.notificationsEnabled) {
+        state.notificationsEnabled = true;
+        saveState();
+        updateNotifyUI();
+      }
+      triggerNotification('🚨 Тест сповіщення', 'Звук та спливаючі повідомлення працюють коректно!', 'alert');
+    });
+
+    // ====== ТЕМА ТА АВТО-ОНОВЛЕННЯ ======
+    let alertCountdown = 30;
+    let weatherTick = 0;
+    let autoTimerId = null;
+
+    // ====== КУРСИ ВАЛЮТ НБУ (UAH) + ДИНАМІКА ЗА ДОБУ ======
+    let currencyRates = {
+      USD: { rate: null, diff: null },
+      EUR: { rate: null, diff: null },
+      PLN: { rate: null, diff: null }
+    };
+
+    function formatYMD(d) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}${m}${day}`;
+    }
+
+    async function fetchCurrencies() {
+      try {
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        const [resToday, resPrev] = await Promise.all([
+          fetch('https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange?json'),
+          fetch(`https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange?date=${formatYMD(yesterday)}&json`)
+        ]);
+        if (!resToday.ok) throw new Error('NBU API error');
+        const listToday = await resToday.json();
+        const listPrev = resPrev.ok ? await resPrev.json() : [];
+
+        ['USD', 'EUR', 'PLN'].forEach(cc => {
+          const item = listToday.find(x => x.cc === cc);
+          const prev = listPrev.find(x => x.cc === cc);
+          if (item) {
+            const r = Number(item.rate);
+            const diff = prev ? (r - Number(prev.rate)) : 0;
+            currencyRates[cc] = { rate: r.toFixed(2), diff };
+          }
+        });
+      } catch {
+        // Залишаємо останні або '--'
+      }
+      renderCurrencies();
+    }
+
+    function renderCurrencies() {
+      document.querySelectorAll('.curr-toggle').forEach(btn => {
+        const active = state.selectedCurrencies.includes(btn.dataset.curr);
+        btn.className = `curr-toggle px-2 py-0.5 rounded-md text-[10px] font-bold border transition ${
+          active ? 'bg-emerald-500/25 text-emerald-200 border-emerald-400/40' : 'bg-white/5 text-slate-400 border-white/10'
+        }`;
+      });
+
+      const grid = document.getElementById('currencyGrid');
+      const activeList = state.selectedCurrencies.length ? state.selectedCurrencies : ['USD'];
+      const meta = {
+        USD: { flag: '🇺🇸', name: 'Долар' },
+        EUR: { flag: '🇪🇺', name: 'Євро' },
+        PLN: { flag: '🇵🇱', name: 'Злотий' }
+      };
+      grid.className = `grid gap-1.5 ${activeList.length === 1 ? 'grid-cols-1' : activeList.length === 2 ? 'grid-cols-2' : 'grid-cols-3'}`;
+      grid.innerHTML = activeList.map(cc => {
+        const info = currencyRates[cc];
+        const rate = info.rate ? `${info.rate} ₴` : '-- ₴';
+        let trendHtml = '<span class="text-[10px] text-slate-400">—</span>';
+        if (info.diff !== null && info.rate !== null) {
+          if (Math.abs(info.diff) < 0.005) {
+            trendHtml = '<span class="text-[10px] text-slate-400">● без змін</span>';
+          } else if (info.diff > 0) {
+            trendHtml = `<span class="text-[10px] font-semibold text-emerald-300">▲ +${info.diff.toFixed(2)}</span>`;
+          } else {
+            trendHtml = `<span class="text-[10px] font-semibold text-rose-300">▼ ${info.diff.toFixed(2)}</span>`;
+          }
+        }
+        return `
+          <div class="rounded-xl bg-slate-950/50 border border-white/10 px-2.5 py-1.5 flex flex-col justify-between">
+            <div class="flex items-center justify-between">
+              <span class="text-[11px] font-semibold text-slate-300">${meta[cc].flag} ${cc}</span>
+              <span class="text-xs font-bold text-white tabular-nums">${rate}</span>
+            </div>
+            <div class="text-right mt-0.5">${trendHtml}</div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // ====== СЕРЕДНІ ЦІНИ НА ПАЛЬНЕ В УКРАЇНІ (Мінфін, 12.11.2026) ======
+    const FUEL_PRICES_UA = [
+      { name: 'А-95', price: 88.26, diff: -0.48 },
+      { name: 'А-92', price: 84.70, diff: 0.02 },
+      { name: 'Дизель', price: 103.59, diff: -0.72 },
+      { name: 'Газ', price: 61.69, diff: 0.54 }
+    ];
+
+    function renderFuelPrices() {
+      const grid = document.getElementById('fuelGrid');
+      grid.innerHTML = FUEL_PRICES_UA.map(f => {
+        const diffHtml = f.diff === 0
+          ? '<span class="text-[10px] text-slate-400">● 0.00</span>'
+          : f.diff > 0
+          ? `<span class="text-[10px] font-semibold text-rose-300">▲ +${f.diff.toFixed(2)}</span>`
+          : `<span class="text-[10px] font-semibold text-emerald-300">▼ ${f.diff.toFixed(2)}</span>`;
+        return `
+          <div class="rounded-xl bg-slate-950/50 border border-white/10 px-2 py-1.5 flex flex-col justify-between">
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] font-semibold text-slate-300">${f.name}</span>
+              <span class="text-xs font-bold text-white tabular-nums">${f.price.toFixed(2)}</span>
+            </div>
+            <div class="text-right mt-0.5">${diffHtml}</div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // ====== РУХ ТРАНСПОРТУ ТА ДОРОГИ (3 ЛОКАЦІЇ + УКРАЇНА) ======
+    function getRoadCondition(w) {
+      if (!w) return { label: 'Оцінка...', badge: 'bg-slate-700 text-slate-200', note: 'Очікуємо дані погоди' };
+      const t = w.temperature_2m;
+      const code = w.weather_code;
+      const wind = w.wind_speed_10m;
+      if (t <= 0) return { label: 'Ожеледиця', badge: 'bg-rose-500/20 text-rose-300', note: 'Слизьке покриття, тримайте дистанцію' };
+      if ((code >= 51 && code <= 82) || code >= 95) return { label: 'Ускладнено', badge: 'bg-amber-400/20 text-amber-200', note: 'Опади, можливі затримки руху' };
+      if (wind >= 30) return { label: 'Вітряно', badge: 'bg-amber-400/20 text-amber-200', note: 'Сильний боковий вітер на трасах' };
+      return { label: 'Вільно', badge: 'bg-emerald-500/20 text-emerald-300', note: 'Сприятливі умови для руху' };
+    }
+
+    function renderTransport() {
+      const grid = document.getElementById('transportGrid');
+      const locCards = state.locations.map((loc, idx) => {
+        const cond = getRoadCondition(state.weather[idx]);
+        const mapsUrl = `https://www.google.com/maps/@${loc.lat},${loc.lon},13z/data=!5m1!1e1`;
+        return `
+          <div class="rounded-xl bg-slate-900/80 border border-white/10 p-3 flex flex-col justify-between gap-2">
+            <div class="flex items-start justify-between gap-2">
+              <div class="min-w-0">
+                <div class="text-[10px] text-slate-400 truncate">${loc.role}</div>
+                <div class="text-sm font-bold text-white truncate">${loc.name}</div>
+              </div>
+              <span class="shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold ${cond.badge}">${cond.label}</span>
+            </div>
+            <div class="flex items-center justify-between gap-2 text-[11px] text-slate-300">
+              <span class="truncate">${cond.note}</span>
+              <a href="${mapsUrl}" target="_blank" rel="noopener noreferrer" class="shrink-0 text-cyan-300 hover:underline font-medium">Трафік →</a>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      const activeCount = state.activeAlerts.length;
+      const uaRoadStatus = activeCount >= 6
+        ? { label: 'Підвищена увага', badge: 'bg-amber-400/20 text-amber-200', note: 'Під час тривог можливі затримки наземного транспорту' }
+        : { label: 'Штатний рух', badge: 'bg-emerald-500/20 text-emerald-300', note: 'Основні траси та залізниця працюють за графіком' };
+
+      const uaCard = `
+        <div class="rounded-xl bg-gradient-to-br from-cyan-500/15 to-slate-900/80 border border-cyan-400/25 p-3 flex flex-col justify-between gap-2">
+          <div class="flex items-start justify-between gap-2">
+            <div>
+              <div class="text-[10px] text-cyan-300 font-semibold uppercase">Загалом по країні</div>
+              <div class="text-sm font-bold text-white">🇺🇦 Україна</div>
+            </div>
+            <span class="shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold ${uaRoadStatus.badge}">${uaRoadStatus.label}</span>
+          </div>
+          <div class="text-[11px] text-slate-300">${uaRoadStatus.note}</div>
+        </div>
+      `;
+
+      grid.innerHTML = locCards + uaCard;
+    }
+
+    document.querySelectorAll('.curr-toggle').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const cc = btn.dataset.curr;
+        if (state.selectedCurrencies.includes(cc)) {
+          if (state.selectedCurrencies.length > 1) {
+            state.selectedCurrencies = state.selectedCurrencies.filter(x => x !== cc);
+          }
+        } else {
+          state.selectedCurrencies.push(cc);
+        }
+        saveState();
+        renderCurrencies();
+      });
+    });
+
+    // ====== НІЧНИЙ РЕЖИМ (ЗВУК БЕЗ ЗМІН) ======
+    function applyNightMode() {
+      const active = Boolean(state.nightMode);
+      document.body.classList.toggle('night-mode', active);
+      const btn = document.getElementById('nightModeBtn');
+      document.getElementById('nightLabel').textContent = active ? 'Нічний: увімк.' : 'Нічний: вимк.';
+      btn.className = active
+        ? 'inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-indigo-500/30 hover:bg-indigo-500/40 text-indigo-200 text-xs font-semibold border border-indigo-400/40 transition'
+        : 'inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-medium text-slate-200 border border-white/10 transition';
+    }
+
+    document.getElementById('nightModeBtn').addEventListener('click', () => {
+      state.nightMode = !state.nightMode;
+      saveState();
+      applyNightMode();
+    });
+
+    function applyTheme() {
+      const isLight = state.theme === 'light';
+      document.body.classList.toggle('theme-light', isLight);
+      document.getElementById('themeIcon').textContent = isLight ? '☀️' : '🌙';
+      document.getElementById('themeLabel').textContent = isLight ? 'Світла' : 'Темна';
+      if (window.__uaGeoData) renderUkraineMap();
+    }
+
+    function updateAutoRefreshUI() {
+      const btn = document.getElementById('autoRefreshBtn');
+      const dot = document.getElementById('autoDot');
+      const label = document.getElementById('autoLabel');
+      if (state.autoRefresh) {
+        btn.className = 'inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-xs font-semibold border border-emerald-400/30 transition';
+        dot.className = 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse';
+        label.textContent = `Авто: ${alertCountdown}с`;
+      } else {
+        btn.className = 'inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-slate-300 text-xs font-semibold border border-white/10 transition';
+        dot.className = 'w-2 h-2 rounded-full bg-slate-400';
+        label.textContent = 'Авто: вимк.';
+      }
+    }
+
+    function startAutoTimer() {
+      if (autoTimerId) clearInterval(autoTimerId);
+      autoTimerId = setInterval(() => {
+        if (!state.autoRefresh) return;
+        alertCountdown -= 1;
+        weatherTick += 1;
+        if (alertCountdown <= 0) {
+          alertCountdown = 30;
+          fetchLiveAlerts();
+          renderPowerRows();
+          checkPowerWarnings();
+        }
+        if (weatherTick >= 900) {
+          weatherTick = 0;
+          fetchAllWeather();
+        }
+        updateAutoRefreshUI();
+      }, 1000);
+    }
+
+    document.getElementById('themeToggleBtn').addEventListener('click', () => {
+      state.theme = state.theme === 'dark' ? 'light' : 'dark';
+      saveState();
+      applyTheme();
+    });
+
+    document.getElementById('autoRefreshBtn').addEventListener('click', () => {
+      state.autoRefresh = !state.autoRefresh;
+      if (state.autoRefresh) alertCountdown = 30;
+      saveState();
+      updateAutoRefreshUI();
+    });
+
+    // ====== ІНІЦІАЛІЗАЦІЯ ======
+    applyTheme();
+    applyNightMode();
+    updateNotifyUI();
+    fetchCurrencies();
+    renderFuelPrices();
+    renderTransport();
+    updateAutoRefreshUI();
+    startAutoTimer();
+    syncSettingsUI();
+    applyFormat();
+    renderWeatherCards();
+    renderUserRegionAlerts();
+    renderPowerRows();
+    fetchAllWeather();
+    fetchLiveAlerts();
+    loadUkraineGeoJSON();
+  </script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>

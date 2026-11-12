@@ -1,0 +1,18 @@
+{
+  "name": "UA Smart Widget — Погода, Тривоги, Світло",
+  "short_name": "UA Віджет",
+  "description": "Погода, курси валют НБУ, ціни на пальне, карта тривог України, графіки світла та рух транспорту.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#0f172a",
+  "lang": "uk",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
